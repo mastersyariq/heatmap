@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Order Flow Heatmap — Bybit Live</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&display=swap');
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#030508;--panel:rgba(5,9,18,.97);--border:rgba(25,40,65,.8);
+  --dim:#3a5070;--mid:#7090b0;--hi:#c0d4e8;--green:#00e882;--red:#ff3558;--yellow:#f5c518;
+  --font:'JetBrains Mono','Fira Code',monospace;
+}
+html,body{width:100%;height:100%;background:var(--bg);overflow:hidden;
+  font-family:var(--font);color:var(--hi);user-select:none;cursor:crosshair}
+
+#hud{
+  position:fixed;top:0;left:0;right:0;height:40px;
+  background:var(--panel);border-bottom:1px solid var(--border);
+  display:flex;align-items:center;gap:8px;padding:0 12px;z-index:30;backdrop-filter:blur(4px);
+}
+.sep{width:1px;height:20px;background:var(--border);flex-shrink:0}
+select,button{
+  background:rgba(15,22,38,.9);border:1px solid var(--border);border-radius:3px;
+  padding:3px 9px;color:var(--mid);font-family:var(--font);font-size:11px;
+  cursor:pointer;transition:border-color .15s,color .15s;outline:none;
+}
+select:hover,button:hover{border-color:#2a4a74;color:var(--hi)}
+#price-live{font-size:15px;font-weight:700;color:var(--hi);min-width:115px;letter-spacing:.5px}
+#price-chg{font-size:11px;min-width:65px}
+.up{color:var(--green)}.down{color:var(--red)}
+#status{margin-left:auto;display:flex;align-items:center;gap:6px;font-size:10px;color:var(--dim)}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--red);transition:background .3s;flex-shrink:0}
+.dot.live{background:var(--green);animation:pulse 2s infinite}
+.dot.sim{background:var(--yellow)}
+@keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(0,232,130,.5)}50%{box-shadow:0 0 0 5px rgba(0,232,130,0)}}
+#stat-txt{white-space:nowrap}
+
+/* Debug */
+#dbg-panel{
+  position:fixed;top:40px;left:0;width:380px;
+  background:rgba(2,5,12,.96);border-right:1px solid var(--border);border-bottom:1px solid var(--border);
+  z-index:25;font-size:10px;padding:8px 10px;max-height:200px;overflow-y:auto;display:none;
+}
+.drow{padding:2px 0;border-bottom:1px solid rgba(25,40,65,.25);color:var(--mid)}
+.drow.err{color:#ff6b6b}.drow.ok{color:var(--green)}.drow.warn{color:var(--yellow)}
+
+#sim-banner{
+  position:fixed;top:40px;left:50%;transform:translateX(-50%);
+  background:rgba(30,22,0,.95);border:1px solid rgba(245,197,24,.4);border-radius:4px;
+  padding:5px 16px;font-size:10px;color:var(--yellow);z-index:25;display:none;white-space:nowrap;
+}
+#cv{position:fixed;top:40px;left:0;display:block}
+#ch-tip{
+  position:fixed;pointer-events:none;background:var(--panel);
+  border:1px solid var(--border);border-radius:3px;
+  padding:3px 8px;font-size:10px;color:var(--mid);z-index:35;display:none;white-space:nowrap;
+}
+#legend{
+  position:fixed;bottom:12px;left:12px;display:flex;gap:12px;align-items:center;
+  font-size:9px;color:var(--dim);z-index:20;pointer-events:none;
+}
+.lg{display:flex;align-items:center;gap:5px}
+.lgd{width:72px;height:5px;border-radius:3px;
+     background:linear-gradient(to right,#02040a,#001aaa,#cc0044,#ff9900,#ffff80)}
+.lgc{width:7px;height:7px;border-radius:50%;border:1.5px solid}
+#kbd{position:fixed;bottom:12px;right:12px;font-size:9px;color:var(--dim);z-index:20;pointer-events:none;text-align:right}
+</style>
+</head>
+<body>
+
+<div id="hud">
+  <select id="sym-sel">
+    <option value="BTCUSDT">BTC/USDT</option>
+    <option value="ETHUSDT">ETH/USDT</option>
+    <option value="SOLUSDT">SOL/USDT</option>
+    <option value="XRPUSDT">XRP/USDT</option>
+    <option value="DOGEUSDT">DOGE/USDT</option>
+    <option value="BNBUSDT">BNB/USDT</option>
+  </select>
+  <div class="sep"></div>
+  <div id="price-live">——.——</div>
+  <div id="price-chg" class="up">+0.00%</div>
+  <div class="sep"></div>
+  <button id="btn-zi">＋</button>
+  <button id="btn-zo">－</button>
+  <button id="btn-reset">⊙</button>
+  <div class="sep"></div>
+  <span style="font-size:10px;color:var(--dim)">Scroll=pan · Shift+Scroll=zoom · Drag=pan · D=debug</span>
+  <div id="status">
+    <div class="dot" id="dot"></div>
+    <span id="stat-txt">Initializing…</span>
+  </div>
+</div>
+
+<div id="dbg-panel">
+  <div style="font-size:9px;color:var(--dim);margin-bottom:6px">DEBUG — tekan D untuk tutup</div>
+  <div id="dbg-rows"></div>
+</div>
+<div id="sim-banner">⚠ SIMULATION MODE — Bybit tidak dapat dijangkau. Buka file HTML di browser lokal untuk data live.</div>
+<canvas id="cv"></canvas>
+<div id="ch-tip"></div>
+<div id="legend">
+  <div class="lg"><div class="lgd"></div><span>Volume density</span></div>
+  <div class="lg"><div class="lgc" style="background:rgba(0,232,130,.2);border-color:#00e882"></div><span>Buy aggressor</span></div>
+  <div class="lg"><div class="lgc" style="background:rgba(255,53,88,.2);border-color:#ff3558"></div><span>Sell aggressor</span></div>
+</div>
+<div id="kbd">D = debug</div>
+
+<script>
+'use strict';
+
+/* ═══════════════════════════════════════════════
+   CONFIG
+═══════════════════════════════════════════════ */
+const CFG = {
+  WS:           'wss://stream.bybit.com/v5/public/linear',
+  REST:         'https://api.bybit.com/v5/market',
+  PING_MS:      20_000,
+  RECONNECT:    4_000,
+  COL_MS:       250,
+  COL_W:        4,
+  PH_RATIO:     0.78,
+  AX_W:         105,
+  FOLLOW:       0.04,
+  MAX_BUB:      600,
+  BUB_LIFE:     5000,
+  BUB_MIN:      3,
+  BUB_MAX:      42,
+  VOL_RING:     200,
+  OB_DEPTH:     50,
+  SIM_LEVELS:   50,
+  REST_TIMEOUT: 6000,
+  /* DOM flash: duração animasi ketika level hilang (ms) */
+  FLASH_MS:     600,
+};
+
+const TICK = {
+  BTCUSDT:.5, ETHUSDT:.05, SOLUSDT:.01,
+  XRPUSDT:.0001, DOGEUSDT:.00001, BNBUSDT:.01
+};
+const SIM_MID = {
+  BTCUSDT:95000, ETHUSDT:1800, SOLUSDT:150,
+  XRPUSDT:.55, DOGEUSDT:.08, BNBUSDT:580
+};
+const VOL_BASE = {
+  BTCUSDT:2, ETHUSDT:20, SOLUSDT:200,
+  XRPUSDT:3000, DOGEUSDT:30000, BNBUSDT:20
+};
+const DEF_RANGE = {
+  BTCUSDT:2000, ETHUSDT:100, SOLUSDT:20,
+  XRPUSDT:.05, DOGEUSDT:.01, BNBUSDT:50
+};
+
+/* ═══════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════ */
+let symbol = 'BTCUSDT', tickSz = TICK[symbol];
+let ws = null, pingTimer = null, reconnTimer = null, intentClose = false;
+let simMode = false, simTimer = null;
+
+/* Orderbook — Map<price, qty> */
+const OB = {
+  bids: new Map(),
+  asks: new Map(),
+  mid: 0, lastMid: 0, ref24h: 0,
+  /* bestBid / bestAsk — diupdate setiap OB change */
+  bestBid: 0, bestAsk: Infinity,
+};
+
+const VIEW = { center: 0, range: 2000, pxPerPrice: 0 };
+const bubbles = [];
+
+/*
+ * DOM FLASH POOL
+ * Ketika sebuah level dihapus dari OB (cancel/hit),
+ * kita simpan animasi flash singkat di sisi DOM agar
+ * terlihat bahwa level tersebut "menghilang".
+ * format: { price, side:'bid'|'ask', qty, startMs }
+ */
+const domFlashes = [];
+
+/* Rolling volume normaliser */
+const Norm = (() => {
+  const ring = new Float32Array(CFG.VOL_RING);
+  let ptr = 0, full = false, pk = 1;
+  return {
+    push(v) {
+      ring[ptr] = v; ptr = (ptr+1)%CFG.VOL_RING; if(!ptr) full=true;
+      let m=1; const l=full?CFG.VOL_RING:ptr;
+      for(let i=0;i<l;i++) if(ring[i]>m) m=ring[i]; pk=m;
+    },
+    get peak() { return pk; }
+  };
+})();
+
+/* ═══════════════════════════════════════════════
+   HISTORY COLUMN STORE
+   Simpan data harga (bukan pixel) → presisi saat pan/zoom
+═══════════════════════════════════════════════ */
+const histColumns = [];  // histColumns[0] = kolom terbaru
+const maxCols = () => Math.ceil(phX() / CFG.COL_W) + 4;
+
+function snapshot() {
+  if (!OB.mid) return;
+  let colMax = 1;
+  OB.bids.forEach(q => { if(q>colMax) colMax=q; });
+  OB.asks.forEach(q => { if(q>colMax) colMax=q; });
+  Norm.push(colMax);
+  const norm = Norm.peak;
+
+  const levels = [];
+  const collect = book => {
+    book.forEach((qty, price) => {
+      const t = Math.pow(Math.min(qty/norm, 1), 0.55);
+      if(t >= 0.018) levels.push({ price, t });
+    });
+  };
+  collect(OB.bids);
+  collect(OB.asks);
+  histColumns.unshift({ levels });
+  const mc = maxCols();
+  if(histColumns.length > mc) histColumns.length = mc;
+}
+
+/* ═══════════════════════════════════════════════
+   CANVAS
+═══════════════════════════════════════════════ */
+const cv  = document.getElementById('cv');
+const ctx = cv.getContext('2d', { alpha: false });
+let histCv = null, histCtx = null;
+let histDirty = true, _lastCenter = 0, _lastPPP = 0;
+
+const phX = () => Math.floor((cv.width - CFG.AX_W) * CFG.PH_RATIO);
+const paX = () => cv.width - CFG.AX_W;
+const P2Y = p => (VIEW.center - p) / VIEW.pxPerPrice + cv.height * .5;
+const Y2P = y => VIEW.center - (y - cv.height * .5) * VIEW.pxPerPrice;
+
+function resize() {
+  cv.width  = window.innerWidth;
+  cv.height = window.innerHeight - 40;
+  VIEW.pxPerPrice = VIEW.range / cv.height;
+  initHistCv(); histDirty = true;
+}
+function initHistCv() {
+  histCv = document.createElement('canvas');
+  histCv.width = phX(); histCv.height = cv.height;
+  histCtx = histCv.getContext('2d', { alpha: false });
+}
+window.addEventListener('resize', resize);
+resize();
+
+/* ═══════════════════════════════════════════════
+   HEAT COLOUR LUT (256 entries)
+═══════════════════════════════════════════════ */
+function heatRGB(t) {
+  t = Math.max(0,Math.min(1,t)); let r,g,b;
+  if     (t<.20){const s=t/.20;       r=0;             g=0;              b=Math.round(s*190);}
+  else if(t<.45){const s=(t-.20)/.25; r=0;             g=Math.round(s*60);b=Math.round(190+s*65);}
+  else if(t<.65){const s=(t-.45)/.20; r=Math.round(s*210);g=Math.round(60+s*90);b=Math.round(255-s*255);}
+  else if(t<.83){const s=(t-.65)/.18; r=Math.round(210+s*45);g=Math.round(150+s*60);b=0;}
+  else           {const s=(t-.83)/.17; r=255;g=Math.round(210+s*45);b=Math.round(s*255);}
+  return `rgb(${r},${g},${b})`;
+}
+const HEAT = Array.from({length:256},(_,i)=>heatRGB(i/255));
+
+/* ═══════════════════════════════════════════════
+   RENDER HISTORY (price-anchored)
+═══════════════════════════════════════════════ */
+function renderHist() {
+  if(!histCv || !VIEW.center) return;
+  const CW = histCv.width, H = histCv.height;
+  const rowH = Math.max(1, Math.ceil(tickSz / VIEW.pxPerPrice));
+  const topP = Y2P(-rowH-2), botP = Y2P(H+rowH+2);
+
+  histCtx.fillStyle = '#030508';
+  histCtx.fillRect(0, 0, CW, H);
+
+  histColumns.forEach((col, i) => {
+    const x = CW - (i+1) * CFG.COL_W;
+    if(x + CFG.COL_W < 0) return;
+    col.levels.forEach(({price, t}) => {
+      if(price < botP || price > topP) return;
+      const y = Math.floor(P2Y(price + tickSz*.5));
+      histCtx.fillStyle = HEAT[Math.round(t*255)];
+      histCtx.fillRect(x, y-rowH, CFG.COL_W, rowH);
+    });
+  });
+
+  _lastCenter = VIEW.center; _lastPPP = VIEW.pxPerPrice;
+  histDirty = false;
+}
+
+/* ═══════════════════════════════════════════════
+   RENDER LOOP
+═══════════════════════════════════════════════ */
+function render() {
+  requestAnimationFrame(render);
+  const W=cv.width, H=cv.height, PH=phX(), PA=paX(), now=Date.now();
+  if(OB.mid) VIEW.center += (OB.mid - VIEW.center) * CFG.FOLLOW;
+  if(histDirty || VIEW.center!==_lastCenter || VIEW.pxPerPrice!==_lastPPP) renderHist();
+
+  ctx.fillStyle='#030508'; ctx.fillRect(0,0,W,H);
+  if(histCv) ctx.drawImage(histCv,0,0);
+
+  rGrid(PA,H);
+  rDom(PH,PA,H,now);     // ← improved DOM renderer
+  rBubbles(PH,H,now);
+  rSpread(PH,PA);
+
+  // Playhead
+  ctx.strokeStyle='rgba(160,190,255,.5)'; ctx.lineWidth=1; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(PH,.5); ctx.lineTo(PH,H); ctx.stroke();
+  ctx.fillStyle='rgba(160,190,255,.3)';
+  ctx.font='9px JetBrains Mono,monospace'; ctx.textAlign='center';
+  ctx.fillText('▶ NOW',PH,11);
+
+  rAxis(PA,W,H);
+  rCrosshair(PA,H);
+  ctx.textAlign='left'; ctx.setLineDash([]);
+}
+
+/* ─── grid ─── */
+function rGrid(PA,H) {
+  if(!VIEW.center) return;
+  const step=niceStep(VIEW.range,H); let lp=Math.floor(Y2P(H)/step)*step;
+  ctx.strokeStyle='rgba(20,38,62,.4)'; ctx.lineWidth=1; ctx.setLineDash([]);
+  while(lp<=Y2P(0)){
+    const y=Math.round(P2Y(lp))+.5;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(PA,y); ctx.stroke();
+    lp+=step;
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   LIVE DOM RENDERER (IMPROVED)
+   ─────────────────────────────────────────────
+   Aturan utama sesuai referensi Bookmap:
+
+   1. BID hanya tampil di harga STRICTLY < bestAsk
+      (di bawah harga saat ini)
+   2. ASK hanya tampil di harga STRICTLY > bestBid
+      (di atas harga saat ini)
+   3. Spread zone = gap antara bestBid dan bestAsk,
+      ditampilkan tanpa bar
+   4. Tinggi bar = tepat 1 tick di layar (pixPerTick),
+      minimum 1px
+   5. Opacity/brightness proporsional dengan volume
+      (wall besar sangat terang, level kecil redup)
+   6. DOM Flash: ketika level dihapus, tampilkan
+      flash singkat (putih memudar) di posisi itu
+   7. Background zone: bidzone=hijau gelap, askzone=merah gelap
+═══════════════════════════════════════════════ */
+function rDom(PH, PA, H, now) {
+  const domW  = PA - PH;
+  const bBid  = OB.bestBid;   // best bid price
+  const bAsk  = OB.bestAsk;   // best ask price
+  if(!bBid || bAsk===Infinity) return;
+
+  /* Pixel per tick — pastikan minimal 1px */
+  const pixPerTick = Math.max(1, tickSz / VIEW.pxPerPrice);
+
+  /* Normalise max volume per sisi (lokal DOM) */
+  let maxB=1, maxA=1;
+  OB.bids.forEach((q,p)=>{ if(p<bAsk && q>maxB) maxB=q; });
+  OB.asks.forEach((q,p)=>{ if(p>bBid && q>maxA) maxA=q; });
+
+  const topP = Y2P(-pixPerTick-2);
+  const botP = Y2P(H+pixPerTick+2);
+
+  /* ── 1. Background zona bid (bawah bestBid) ── */
+  const yBid  = P2Y(bBid);
+  const yBotV = Math.min(H, P2Y(Math.max(botP, bBid - VIEW.range*.5)));
+  if(yBid < H) {
+    const gBid = ctx.createLinearGradient(PH,yBid,PH,yBotV);
+    gBid.addColorStop(0, 'rgba(0,60,28,.18)');
+    gBid.addColorStop(1, 'rgba(0,20,10,.04)');
+    ctx.fillStyle = gBid;
+    ctx.fillRect(PH, yBid, domW, yBotV - yBid);
+  }
+
+  /* ── 2. Background zona ask (atas bestAsk) ── */
+  const yAsk  = P2Y(bAsk);
+  const yTopV = Math.max(0, P2Y(Math.min(topP, bAsk + VIEW.range*.5)));
+  if(yAsk > 0) {
+    const gAsk = ctx.createLinearGradient(PH,yAsk,PH,yTopV);
+    gAsk.addColorStop(0, 'rgba(80,10,18,.18)');
+    gAsk.addColorStop(1, 'rgba(30,5,8,.04)');
+    ctx.fillStyle = gAsk;
+    ctx.fillRect(PH, yTopV, domW, yAsk - yTopV);
+  }
+
+  /* ── 3. Spread zone highlight ── */
+  const spreadPx = Math.abs(yBid - yAsk);
+  if(spreadPx > 0 && spreadPx < H) {
+    ctx.fillStyle = 'rgba(255,255,160,.025)';
+    ctx.fillRect(PH, yAsk, domW, Math.max(spreadPx, 1));
+  }
+
+  /* ── 4. Render BID bars
+     Aturan: price < bestAsk (order beli valid di bawah ask)
+     Bids harus berada di bawah bestAsk — jika tidak, OB stale,
+     abaikan saja. ── */
+  OB.bids.forEach((qty, price) => {
+    /* CRITICAL: skip jika price >= bestAsk
+       (artinya harga sudah dilewati — order ini tidak valid) */
+    if(price >= bAsk) return;
+    if(price < botP || price > topP) return;
+
+    const t    = Math.pow(qty / maxB, 0.6);
+    const y    = Math.floor(P2Y(price + tickSz * .5));
+    const barH = Math.max(1, Math.round(pixPerTick));
+
+    /* Bar body */
+    const alpha = 0.06 + t * 0.92;
+    const g = Math.round(100 + t * 158);
+    const b = Math.round(t * 70);
+    ctx.fillStyle = `rgba(0,${g},${b},${alpha.toFixed(3)})`;
+    ctx.fillRect(PH, y - barH, domW, barH);
+
+    /* Garis kiri terang (price level indicator) */
+    ctx.fillStyle = `rgba(0,${g},${b},${Math.min(1, alpha * 1.4).toFixed(3)})`;
+    ctx.fillRect(PH, y - barH, 2, barH);
+
+    /* Volume label untuk wall besar (t > 0.65) */
+    if(t > 0.65 && pixPerTick > 8) {
+      ctx.fillStyle = `rgba(180,255,210,${(t*.7).toFixed(2)})`;
+      ctx.font = `${Math.min(10, Math.max(8, pixPerTick*.7)).toFixed(0)}px JetBrains Mono,monospace`;
+      ctx.textAlign = 'left';
+      ctx.fillText(fmtQty(qty), PH + 5, y - barH * .15);
+    }
+  });
+
+  /* ── 5. Render ASK bars
+     Aturan: price > bestBid ── */
+  OB.asks.forEach((qty, price) => {
+    if(price <= bBid) return;  // CRITICAL: skip jika di bawah/sama bestBid
+    if(price < botP || price > topP) return;
+
+    const t    = Math.pow(qty / maxA, 0.6);
+    const y    = Math.floor(P2Y(price + tickSz * .5));
+    const barH = Math.max(1, Math.round(pixPerTick));
+    const alpha = 0.06 + t * 0.92;
+    const r    = Math.round(120 + t * 135);
+
+    ctx.fillStyle = `rgba(${r},${Math.round(t*20)},${Math.round(t*45)},${alpha.toFixed(3)})`;
+    ctx.fillRect(PH, y - barH, domW, barH);
+
+    ctx.fillStyle = `rgba(${r},${Math.round(t*20)},${Math.round(t*45)},${Math.min(1,alpha*1.4).toFixed(3)})`;
+    ctx.fillRect(PH, y - barH, 2, barH);
+
+    if(t > 0.65 && pixPerTick > 8) {
+      ctx.fillStyle = `rgba(255,180,185,${(t*.7).toFixed(2)})`;
+      ctx.font = `${Math.min(10, Math.max(8, pixPerTick*.7)).toFixed(0)}px JetBrains Mono,monospace`;
+      ctx.textAlign = 'left';
+      ctx.fillText(fmtQty(qty), PH + 5, y - barH * .15);
+    }
+  });
+
+  /* ── 6. DOM Flash (order dibatalkan/ter-hit) ── */
+  for(let i = domFlashes.length-1; i >= 0; i--) {
+    const f   = domFlashes[i];
+    const age = now - f.startMs;
+    if(age > CFG.FLASH_MS) { domFlashes.splice(i,1); continue; }
+    const prog = age / CFG.FLASH_MS;         // 0→1
+    const fade = Math.pow(1 - prog, 1.5);   // easing out
+    const y    = Math.floor(P2Y(f.price + tickSz*.5));
+    const barH = Math.max(2, Math.round(pixPerTick));
+
+    if(f.side === 'bid') {
+      ctx.fillStyle = `rgba(0,255,140,${(fade * .9).toFixed(3)})`;
+    } else {
+      ctx.fillStyle = `rgba(255,80,100,${(fade * .9).toFixed(3)})`;
+    }
+    /* Flash melebar ke kanan sesuai progress lalu memudar */
+    const flashW = domW * (1 - prog * .6);
+    ctx.fillRect(PH, y - barH, flashW, barH);
+  }
+
+  ctx.textAlign = 'left';
+}
+
+/* ─── spread dashed lines ─── */
+function rSpread(PH, PA) {
+  const bB = OB.bestBid, bA = OB.bestAsk;
+  if(!bB || bA===Infinity) return;
+  ctx.lineWidth=1; ctx.setLineDash([3,6]);
+  ctx.strokeStyle='rgba(0,232,130,.6)';
+  ctx.beginPath(); ctx.moveTo(0,P2Y(bB)); ctx.lineTo(PA,P2Y(bB)); ctx.stroke();
+  ctx.strokeStyle='rgba(255,53,88,.6)';
+  ctx.beginPath(); ctx.moveTo(0,P2Y(bA)); ctx.lineTo(PA,P2Y(bA)); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+/* ─── trade bubbles ─── */
+function rBubbles(PH,H,now) {
+  for(let i=bubbles.length-1;i>=0;i--){
+    const b=bubbles[i], age=now-b.ts;
+    if(age>CFG.BUB_LIFE){bubbles.splice(i,1);continue;}
+    const bx=PH-(age/CFG.COL_MS)*CFG.COL_W;
+    if(bx+b.r<-20){bubbles.splice(i,1);continue;}
+    const by=P2Y(b.price), fade=Math.pow(1-age/CFG.BUB_LIFE,.5);
+    ctx.globalAlpha=fade;
+    ctx.beginPath(); ctx.arc(bx,by,b.r,0,Math.PI*2);
+    ctx.fillStyle=b.fill; ctx.fill();
+    ctx.strokeStyle=b.stroke; ctx.lineWidth=1.5; ctx.stroke();
+    ctx.globalAlpha=1;
+  }
+}
+
+/* ─── price axis ─── */
+function rAxis(PA,W,H) {
+  ctx.fillStyle='rgba(3,7,17,.97)'; ctx.fillRect(PA,0,CFG.AX_W,H);
+  ctx.strokeStyle='rgba(20,38,62,.9)'; ctx.lineWidth=1; ctx.setLineDash([]);
+  ctx.beginPath(); ctx.moveTo(PA,.5); ctx.lineTo(PA,H); ctx.stroke();
+  if(!VIEW.center) return;
+
+  const step=niceStep(VIEW.range,H); let lp=Math.floor(Y2P(H)/step)*step;
+  ctx.font='10px JetBrains Mono,monospace'; ctx.textAlign='right';
+  ctx.fillStyle='rgba(80,115,148,.9)';
+  while(lp<=Y2P(0)){
+    const y=Math.round(P2Y(lp));
+    ctx.fillRect(PA,y,4,1);
+    ctx.fillText(fmtP(lp),W-5,y+4);
+    lp+=step;
+  }
+
+  /* Tooltip qty di price axis untuk level besar */
+  const pixPerTick = tickSz / VIEW.pxPerPrice;
+  if(pixPerTick > 12) {
+    ctx.font='9px JetBrains Mono,monospace'; ctx.fillStyle='rgba(60,90,130,.8)';
+    let maxB=1,maxA=1;
+    OB.bids.forEach((q,p)=>{ if(p<OB.bestAsk && q>maxB) maxB=q; });
+    OB.asks.forEach((q,p)=>{ if(p>OB.bestBid && q>maxA) maxA=q; });
+    OB.bids.forEach((qty,price)=>{
+      if(price>=OB.bestAsk) return;
+      const t=qty/maxB; if(t<0.2) return;
+      const y=Math.round(P2Y(price+tickSz*.5));
+      if(y<0||y>H) return;
+      ctx.fillStyle=`rgba(0,200,100,${(.3+t*.6).toFixed(2)})`;
+      ctx.fillText(fmtQty(qty),PA+6,y+3);
+    });
+    OB.asks.forEach((qty,price)=>{
+      if(price<=OB.bestBid) return;
+      const t=qty/maxA; if(t<0.2) return;
+      const y=Math.round(P2Y(price+tickSz*.5));
+      if(y<0||y>H) return;
+      ctx.fillStyle=`rgba(255,100,120,${(.3+t*.6).toFixed(2)})`;
+      ctx.fillText(fmtQty(qty),PA+6,y+3);
+    });
+  }
+
+  if(OB.mid){
+    const my=Math.round(P2Y(OB.mid)), up=OB.mid>=OB.lastMid;
+    rrect(ctx,PA+2,my-10,CFG.AX_W-4,20,3);
+    ctx.fillStyle=up?'rgba(0,68,36,.95)':'rgba(82,10,18,.95)'; ctx.fill();
+    ctx.strokeStyle=up?'rgba(0,232,130,.8)':'rgba(255,53,88,.8)'; ctx.lineWidth=.8; ctx.stroke();
+    ctx.fillStyle=up?'#00e882':'#ff3558';
+    ctx.font='bold 11px JetBrains Mono,monospace';
+    ctx.textAlign='right';
+    ctx.fillText(fmtP(OB.mid),W-5,my+4);
+    ctx.font='10px JetBrains Mono,monospace';
+  }
+  ctx.textAlign='left';
+}
+
+/* ─── crosshair ─── */
+const CH={x:-1,y:-1,on:false};
+function rCrosshair(PA,H){
+  if(!CH.on) return;
+  ctx.strokeStyle='rgba(120,160,200,.18)'; ctx.lineWidth=1; ctx.setLineDash([3,6]);
+  ctx.beginPath(); ctx.moveTo(0,CH.y); ctx.lineTo(PA,CH.y); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(CH.x,.5); ctx.lineTo(CH.x,H); ctx.stroke();
+}
+
+/* ═══════════════════════════════════════════════
+   DEBUG LOG
+═══════════════════════════════════════════════ */
+const dbgRows=document.getElementById('dbg-rows');
+function log(type,...args){
+  console.log(`[HM:${type}]`,...args);
+  const d=document.createElement('div');
+  d.className='drow '+type;
+  d.textContent=`${new Date().toLocaleTimeString()} [${type.toUpperCase()}] ${args.join(' ')}`;
+  dbgRows.insertBefore(d,dbgRows.firstChild);
+  if(dbgRows.childElementCount>60) dbgRows.lastChild?.remove();
+}
+document.addEventListener('keydown',e=>{
+  if(e.key==='d'||e.key==='D'){
+    const p=document.getElementById('dbg-panel');
+    p.style.display=p.style.display==='block'?'none':'block';
+  }
+});
+
+/* ═══════════════════════════════════════════════
+   REST BOOTSTRAP
+═══════════════════════════════════════════════ */
+async function fetchRestPrice(sym){
+  log('info',`REST: fetching ${sym}…`);
+  const ctrl=new AbortController(), tid=setTimeout(()=>ctrl.abort(),CFG.REST_TIMEOUT);
+  try{
+    const r=await fetch(`${CFG.REST}/tickers?category=linear&symbol=${sym}`,{signal:ctrl.signal});
+    clearTimeout(tid);
+    if(!r.ok) throw new Error(`HTTP ${r.status}`);
+    const j=await r.json(); if(j.retCode!==0) throw new Error(j.retMsg);
+    const info=j.result.list[0], price=parseFloat(info.lastPrice), pcnt=parseFloat(info.price24hPcnt||'0');
+    if(isNaN(price)||price<=0) throw new Error('invalid price');
+    OB.mid=OB.lastMid=price; OB.ref24h=price/(1+pcnt);
+    VIEW.center=price; VIEW.range=DEF_RANGE[sym]||2000; VIEW.pxPerPrice=VIEW.range/cv.height;
+    updateHUD(price,pcnt); log('ok',`REST: ${sym}=${price}`); return true;
+  } catch(err){ clearTimeout(tid); log('err','REST failed: '+err.message); return false; }
+}
+
+/* ═══════════════════════════════════════════════
+   WEBSOCKET + HEARTBEAT
+═══════════════════════════════════════════════ */
+function wsConnect(sym){
+  symbol=sym; tickSz=TICK[sym]||.5; intentClose=false;
+  clearInterval(pingTimer); clearTimeout(reconnTimer);
+  setStatus(false,'Connecting…'); log('info',`WS: connecting (${sym})`);
+  ws=new WebSocket(CFG.WS);
+
+  ws.onopen=()=>{
+    log('ok','WS open');
+    setStatus(true,`${sym} · LIVE`);
+    ws.send(JSON.stringify({op:'subscribe',args:[`orderbook.${CFG.OB_DEPTH}.${sym}`,`publicTrade.${sym}`]}));
+    clearInterval(pingTimer);
+    pingTimer=setInterval(()=>{ if(ws&&ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({op:'ping'})); },CFG.PING_MS);
+  };
+  ws.onmessage=ev=>{
+    let msg; try{msg=JSON.parse(ev.data)}catch{return}
+    if(msg.op==='pong'||msg.op==='subscribe'||msg.op==='auth') return;
+    dispatch(msg);
+  };
+  ws.onclose=ev=>{
+    clearInterval(pingTimer); log('warn',`WS closed: ${ev.code}`);
+    setStatus(false,'Reconnecting…');
+    if(!intentClose) reconnTimer=setTimeout(()=>wsConnect(symbol),CFG.RECONNECT);
+  };
+  ws.onerror=()=>{ log('err','WS error'); };
+}
+function wsClose(){
+  intentClose=true; clearInterval(pingTimer); clearTimeout(reconnTimer);
+  try{if(ws)ws.close();}catch{}
+}
+
+/* ═══════════════════════════════════════════════
+   MESSAGE HANDLERS
+═══════════════════════════════════════════════ */
+function dispatch(msg){
+  const t=msg.topic||'';
+  if(t.startsWith('orderbook.'))   handleOB(msg);
+  else if(t.startsWith('publicTrade.')) handleTrades(msg.data);
+}
+
+/*
+ * APPLY LEVELS — diubah untuk tracking flash
+ *
+ * Sebelum menerapkan delta, cek level mana yang
+ * qty-nya akan menjadi 0 (dihapus). Simpan ke
+ * domFlashes supaya animasi fade-out bisa dirender.
+ */
+function applyLevels(book, levels, side) {
+  if(!Array.isArray(levels)) return;
+  for(const item of levels){
+    const p=parseFloat(item[0]), q=parseFloat(item[1]);
+    if(isNaN(p)||isNaN(q)) continue;
+    if(q===0){
+      /* Level dihapus → flash */
+      const oldQty=book.get(p)||0;
+      if(oldQty>0 && domFlashes.length<80){
+        domFlashes.push({ price:p, side, qty:oldQty, startMs:Date.now() });
+      }
+      book.delete(p);
+    } else {
+      book.set(p,q);
+    }
+  }
+}
+
+function handleOB(msg){
+  const data=msg.data; if(!data) return;
+  if(msg.type==='snapshot'){ OB.bids.clear(); OB.asks.clear(); }
+
+  applyLevels(OB.bids, data.b, 'bid');
+  applyLevels(OB.asks, data.a, 'ask');
+
+  /* Update best bid/ask */
+  let bB=0, bA=Infinity;
+  OB.bids.forEach((_,p)=>{ if(p>bB) bB=p; });
+  OB.asks.forEach((_,p)=>{ if(p<bA) bA=p; });
+
+  OB.bestBid=bB; OB.bestAsk=bA;
+
+  if(bB>0&&bA<Infinity){
+    const mid=(bB+bA)*.5;
+    OB.lastMid=OB.mid||mid; OB.mid=mid;
+    if(!VIEW.center){
+      VIEW.center=mid; VIEW.range=DEF_RANGE[symbol]||2000;
+      VIEW.pxPerPrice=VIEW.range/cv.height;
+    }
+    updateHUD(mid, OB.ref24h?(mid-OB.ref24h)/OB.ref24h:0);
+  }
+}
+
+function handleTrades(list){
+  if(!Array.isArray(list)) return;
+  const base=VOL_BASE[symbol]||30;
+  for(const t of list){
+    const price=parseFloat(t.p), size=parseFloat(t.v), isBuy=(t.S==='Buy');
+    bubbles.push({
+      price, r:clamp(Math.log1p(size/base)*10,CFG.BUB_MIN,CFG.BUB_MAX),
+      fill:  isBuy?'rgba(0,232,130,.14)':'rgba(255,53,88,.14)',
+      stroke:isBuy?'rgba(0,232,130,.9)':'rgba(255,53,88,.9)',
+      ts:Date.now()
+    });
+    if(bubbles.length>CFG.MAX_BUB) bubbles.shift();
+  }
+}
+
+/* ═══════════════════════════════════════════════
+   SIMULATION MODE
+═══════════════════════════════════════════════ */
+function startSim(sym){
+  simMode=true;
+  document.getElementById('sim-banner').style.display='block';
+  document.getElementById('dot').className='dot sim';
+  document.getElementById('stat-txt').textContent='SIMULATION';
+  log('warn','Simulation: '+sym);
+  tickSz=TICK[sym]||.5;
+  let mid=SIM_MID[sym]||1000;
+  OB.mid=OB.lastMid=mid; OB.ref24h=mid; OB.bestBid=mid-.5*tickSz; OB.bestAsk=mid+.5*tickSz;
+  VIEW.center=mid; VIEW.range=DEF_RANGE[sym]||2000; VIEW.pxPerPrice=VIEW.range/cv.height;
+  updateHUD(mid,0);
+
+  const buildOB=()=>{
+    OB.bids.clear(); OB.asks.clear();
+    for(let i=1;i<=CFG.SIM_LEVELS;i++){
+      const dist=i*tickSz*(1+Math.random()*.5);
+      OB.bids.set(+((mid-dist).toFixed(8)), Math.random()*60+1);
+      OB.asks.set(+((mid+dist).toFixed(8)), Math.random()*60+1);
+    }
+    // Walls
+    for(let i=0;i<4;i++){
+      if(Math.random()<.5) OB.bids.set(+((mid-tickSz*(Math.floor(Math.random()*12)+2)).toFixed(8)),150+Math.random()*500);
+      if(Math.random()<.5) OB.asks.set(+((mid+tickSz*(Math.floor(Math.random()*12)+2)).toFixed(8)),150+Math.random()*500);
+    }
+  };
+  buildOB();
+
+  clearInterval(simTimer);
+  simTimer=setInterval(()=>{
+    const drift=(Math.random()-.5)*tickSz*5;
+    mid=+((mid+drift).toFixed(8));
+    OB.lastMid=OB.mid; OB.mid=mid;
+
+    // Evolve OB + flash on random cancels
+    OB.bids.forEach((q,p)=>{
+      if(p>=mid){ domFlashes.push({price:p,side:'bid',qty:q,startMs:Date.now()}); OB.bids.delete(p); return; }
+      const nq=q*(.8+Math.random()*.4);
+      if(nq<.5){ domFlashes.push({price:p,side:'bid',qty:q,startMs:Date.now()}); OB.bids.delete(p); }
+      else OB.bids.set(p,nq);
+    });
+    OB.asks.forEach((q,p)=>{
+      if(p<=mid){ domFlashes.push({price:p,side:'ask',qty:q,startMs:Date.now()}); OB.asks.delete(p); return; }
+      const nq=q*(.8+Math.random()*.4);
+      if(nq<.5){ domFlashes.push({price:p,side:'ask',qty:q,startMs:Date.now()}); OB.asks.delete(p); }
+      else OB.asks.set(p,nq);
+    });
+
+    // Add fresh levels
+    for(let i=0;i<5;i++){
+      OB.bids.set(+((mid-tickSz*(1+Math.random()*15)).toFixed(8)),Math.random()*50+1);
+      OB.asks.set(+((mid+tickSz*(1+Math.random()*15)).toFixed(8)),Math.random()*50+1);
+    }
+
+    // Update best
+    let bB=0,bA=Infinity;
+    OB.bids.forEach((_,p)=>{if(p<mid&&p>bB)bB=p});
+    OB.asks.forEach((_,p)=>{if(p>mid&&p<bA)bA=p});
+    if(!bB){bB=mid-tickSz} if(bA===Infinity){bA=mid+tickSz}
+    OB.bestBid=bB; OB.bestAsk=bA;
+
+    // Trade bubbles
+    if(Math.random()<.45){
+      const size=Math.pow(Math.random(),2)*200+.5, isBuy=Math.random()>.45;
+      bubbles.push({
+        price:mid+(Math.random()-.5)*tickSz,
+        r:clamp(Math.log1p(size/(VOL_BASE[sym]||30))*10,CFG.BUB_MIN,CFG.BUB_MAX),
+        fill:isBuy?'rgba(0,232,130,.14)':'rgba(255,53,88,.14)',
+        stroke:isBuy?'rgba(0,232,130,.9)':'rgba(255,53,88,.9)',
+        ts:Date.now()
+      });
+      if(bubbles.length>CFG.MAX_BUB) bubbles.shift();
+    }
+    updateHUD(mid,(mid-OB.ref24h)/OB.ref24h);
+  },120);
+}
+function stopSim(){clearInterval(simTimer);simMode=false;document.getElementById('sim-banner').style.display='none';}
+
+/* ═══════════════════════════════════════════════
+   UI
+═══════════════════════════════════════════════ */
+function updateHUD(price,pcntDec){
+  document.getElementById('price-live').textContent=fmtP(price);
+  const pct=pcntDec*100, el=document.getElementById('price-chg');
+  el.textContent=(pct>=0?'+':'')+pct.toFixed(2)+'%';
+  el.className=pct>=0?'up':'down';
+}
+function setStatus(live,text){
+  if(!simMode) document.getElementById('dot').className='dot'+(live?' live':'');
+  document.getElementById('stat-txt').textContent=text;
+}
+
+/* ═══════════════════════════════════════════════
+   MATH / FORMAT
+═══════════════════════════════════════════════ */
+function niceStep(range,pixH){
+  const raw=range/(pixH/40),mag=Math.pow(10,Math.floor(Math.log10(raw))),n=raw/mag;
+  return(n<1.5?1:n<3.5?2:n<7.5?5:10)*mag;
+}
+function fmtP(p){
+  const a=Math.abs(p);
+  return a>=10000?p.toFixed(1):a>=1000?p.toFixed(1):a>=100?p.toFixed(2):a>=1?p.toFixed(3):a>=.01?p.toFixed(4):p.toFixed(6);
+}
+function fmtQty(q){
+  return q>=1000?Math.round(q/100)/10+'k':q>=100?Math.round(q)+'':q.toFixed(1);
+}
+function clamp(v,lo,hi){return v<lo?lo:v>hi?hi:v;}
+function rrect(c,x,y,w,h,r){
+  c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.quadraticCurveTo(x+w,y,x+w,y+r);
+  c.lineTo(x+w,y+h-r);c.quadraticCurveTo(x+w,y+h,x+w-r,y+h);c.lineTo(x+r,y+h);
+  c.quadraticCurveTo(x,y+h,x,y+h-r);c.lineTo(x,y+r);c.quadraticCurveTo(x,y,x+r,y);c.closePath();
+}
+
+/* ═══════════════════════════════════════════════
+   CONTROLS
+═══════════════════════════════════════════════ */
+document.getElementById('sym-sel').addEventListener('change',async e=>{
+  const sym=e.target.value;
+  wsClose(); stopSim();
+  OB.bids.clear();OB.asks.clear();bubbles.length=0;domFlashes.length=0;
+  histColumns.length=0;histDirty=true;
+  OB.mid=OB.lastMid=OB.ref24h=OB.bestBid=0;OB.bestAsk=Infinity;
+  VIEW.center=0; initHistCv(); await boot(sym);
+});
+document.getElementById('btn-zi').addEventListener('click',()=>{
+  VIEW.range=Math.max(tickSz*10,VIEW.range*.70);
+  VIEW.pxPerPrice=VIEW.range/cv.height; histDirty=true;
+});
+document.getElementById('btn-zo').addEventListener('click',()=>{
+  VIEW.range=Math.min(1e6,VIEW.range*1.43);
+  VIEW.pxPerPrice=VIEW.range/cv.height; histDirty=true;
+});
+document.getElementById('btn-reset').addEventListener('click',()=>{
+  VIEW.center=OB.mid; VIEW.range=DEF_RANGE[symbol]||2000;
+  VIEW.pxPerPrice=VIEW.range/cv.height; histDirty=true;
+});
+cv.addEventListener('wheel',e=>{
+  e.preventDefault();
+  if(e.shiftKey){VIEW.range=clamp(VIEW.range*(e.deltaY>0?1.12:.89),tickSz*10,1e6);}
+  else{VIEW.center+=e.deltaY*VIEW.pxPerPrice*.6;}
+  VIEW.pxPerPrice=VIEW.range/cv.height;
+},{passive:false});
+const drag={on:false,sy:0,sc:0};
+cv.addEventListener('mousedown',e=>{drag.on=true;drag.sy=e.clientY;drag.sc=VIEW.center;});
+cv.addEventListener('mouseup',()=>{drag.on=false;});
+cv.addEventListener('mouseleave',()=>{drag.on=false;CH.on=false;document.getElementById('ch-tip').style.display='none';});
+cv.addEventListener('mousemove',e=>{
+  const y=e.clientY-40; CH.x=e.clientX;CH.y=y;CH.on=true;
+  if(drag.on) VIEW.center=drag.sc+(drag.sy-e.clientY)*VIEW.pxPerPrice;
+  const snap=Math.round(Y2P(y)/tickSz)*tickSz;
+  const bv=OB.bids.get(snap),av=OB.asks.get(snap);
+  const extra=bv?` · Bid ${fmtQty(bv)}`:av?` · Ask ${fmtQty(av)}`:'';
+  const tip=document.getElementById('ch-tip');
+  tip.style.display='block';tip.style.left=(e.clientX+14)+'px';tip.style.top=(e.clientY+8)+'px';
+  tip.textContent=fmtP(Y2P(y))+extra;
+});
+
+/* ═══════════════════════════════════════════════
+   BOOT
+═══════════════════════════════════════════════ */
+async function boot(sym){
+  log('info',`=== BOOT: ${sym} ===`);
+  const restOk=await fetchRestPrice(sym);
+  if(!restOk){
+    const fb=SIM_MID[sym]||1000;
+    VIEW.center=fb; VIEW.range=DEF_RANGE[sym]||2000; VIEW.pxPerPrice=VIEW.range/cv.height;
+    OB.mid=OB.lastMid=fb;
+    document.getElementById('price-live').textContent=fmtP(fb)+' (est)';
+  }
+  if(!boot._timer) boot._timer=setInterval(()=>{snapshot();histDirty=true;},CFG.COL_MS);
+  if(!boot._raf){boot._raf=true;requestAnimationFrame(render);}
+  wsConnect(sym);
+  setTimeout(()=>{
+    if(OB.bids.size===0&&!intentClose){
+      log('warn','No OB data in 8s → simulation');
+      wsClose(); startSim(sym);
+    }
+  },8000);
+}
+boot('BTCUSDT');
+</script>
+</body>
+</html>
